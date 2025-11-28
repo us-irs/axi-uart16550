@@ -1,13 +1,18 @@
+//! # Transmitter (TX) support module
 use core::convert::Infallible;
 
 use crate::{
     DEFAULT_RX_TRIGGER_LEVEL,
-    registers::{self, Fcr, Ier},
+    registers::{self, FifoControl, InterruptEnable},
 };
 
+/// AXI UART16550 TX driver.
+///
+/// Can be created by [super::AxiUart16550::split]ting a regular AXI UARTLITE structure or
+/// by [Self::steal]ing it unsafely.
 pub struct Tx {
     /// Internal MMIO register structure.
-    pub(crate) regs: registers::MmioAxiUart16550<'static>,
+    pub(crate) regs: registers::MmioRegisters<'static>,
 }
 
 impl Tx {
@@ -26,14 +31,15 @@ impl Tx {
     /// The same safey rules specified in [super::AxiUart16550::new] apply.
     pub const unsafe fn steal(base_addr: usize) -> Self {
         Self {
-            regs: unsafe { registers::AxiUart16550::new_mmio_at(base_addr) },
+            regs: unsafe { registers::Registers::new_mmio_at(base_addr) },
         }
     }
 
-    pub(crate) fn new(regs: registers::MmioAxiUart16550<'static>) -> Self {
+    pub(crate) fn new(regs: registers::MmioRegisters<'static>) -> Self {
         Self { regs }
     }
 
+    /// Write a byte into the FIFO if there is space available.
     #[inline]
     pub fn write_fifo(&mut self, data: u8) -> nb::Result<(), Infallible> {
         if !self.thr_empty() {
@@ -43,19 +49,21 @@ impl Tx {
         Ok(())
     }
 
+    /// Enable TX interrupts.
     #[inline]
     pub fn enable_interrupt(&mut self) {
         self.regs.modify_ier_or_dlm(|val| {
-            let mut ier = Ier::new_with_raw_value(val);
+            let mut ier = InterruptEnable::new_with_raw_value(val);
             ier.set_thr_empty(true);
             ier.raw_value()
         });
     }
 
+    /// Disable TX interrupts.
     #[inline]
     pub fn disable_interrupt(&mut self) {
         self.regs.modify_ier_or_dlm(|val| {
-            let mut ier = Ier::new_with_raw_value(val);
+            let mut ier = InterruptEnable::new_with_raw_value(val);
             ier.set_thr_empty(false);
             ier.raw_value()
         });
@@ -69,21 +77,23 @@ impl Tx {
         self.regs.write_fifo_or_dll(data as u32);
     }
 
-    // TODO: Make this non-mut as soon as pure reads are available.
+    /// Transmitter Holding Register empty status.
     #[inline(always)]
-    pub fn thr_empty(&mut self) -> bool {
+    pub fn thr_empty(&self) -> bool {
         self.regs.read_lsr().thr_empty()
     }
 
+    /// Transmitter empty status.
     #[inline(always)]
-    pub fn tx_empty(&mut self) -> bool {
+    pub fn tx_empty(&self) -> bool {
         self.regs.read_lsr().tx_empty()
     }
 
+    /// Reset the FIFOs.
     #[inline]
     pub fn reset_fifo(&mut self) {
         self.regs.write_iir_or_fcr(
-            Fcr::builder()
+            FifoControl::builder()
                 .with_rx_fifo_trigger(DEFAULT_RX_TRIGGER_LEVEL)
                 .with_dma_mode_sel(false)
                 .with_reset_tx_fifo(true)
@@ -94,6 +104,7 @@ impl Tx {
         );
     }
 
+    /// Should be called from the interrupt handler when a THR empty interrupt occurs.
     #[inline]
     pub fn on_interrupt_thr_empty(&mut self, next_write_chunk: &[u8]) -> usize {
         if next_write_chunk.is_empty() {

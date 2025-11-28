@@ -24,19 +24,25 @@ use raw_slice::RawBufSlice;
 
 use crate::{
     FIFO_DEPTH, Tx,
-    registers::{self, Ier},
+    registers::{self, InterruptEnable},
 };
 
+/// 1 waker (default).
 #[cfg(feature = "1-waker")]
 pub const NUM_WAKERS: usize = 1;
+/// 2 wakers.
 #[cfg(feature = "2-wakers")]
 pub const NUM_WAKERS: usize = 2;
+/// 4 wakers.
 #[cfg(feature = "4-wakers")]
 pub const NUM_WAKERS: usize = 4;
+/// 8 wakers.
 #[cfg(feature = "8-wakers")]
 pub const NUM_WAKERS: usize = 8;
+/// 16 wakers.
 #[cfg(feature = "16-wakers")]
 pub const NUM_WAKERS: usize = 16;
+/// 32 wakers.
 #[cfg(feature = "32-wakers")]
 pub const NUM_WAKERS: usize = 32;
 static UART_TX_WAKERS: [AtomicWaker; NUM_WAKERS] = [const { AtomicWaker::new() }; NUM_WAKERS];
@@ -46,6 +52,7 @@ static TX_CONTEXTS: [Mutex<RefCell<TxContext>>; NUM_WAKERS] =
 // critical section.
 static TX_DONE: [AtomicBool; NUM_WAKERS] = [const { AtomicBool::new(false) }; NUM_WAKERS];
 
+/// Invalid waker index error.
 #[derive(Debug, thiserror::Error)]
 #[error("invalid waker slot index: {0}")]
 pub struct InvalidWakerIndex(pub usize);
@@ -61,7 +68,7 @@ pub fn on_interrupt_tx(tx: &mut Tx, waker_slot: usize) {
         return;
     }
     let status = tx.regs.read_lsr();
-    let ier = Ier::new_with_raw_value(tx.regs.read_ier_or_dlm());
+    let ier = InterruptEnable::new_with_raw_value(tx.regs.read_ier_or_dlm());
     // Interrupt are not even enabled.
     if !ier.thr_empty() {
         return;
@@ -107,7 +114,7 @@ pub fn on_interrupt_tx(tx: &mut Tx, waker_slot: usize) {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct TxContext {
+struct TxContext {
     progress: usize,
     slice: RawBufSlice,
 }
@@ -122,9 +129,10 @@ impl TxContext {
     }
 }
 
+/// TX future structure.
 pub struct TxFuture {
     waker_idx: usize,
-    reg_block: registers::MmioAxiUart16550<'static>,
+    reg_block: registers::MmioRegisters<'static>,
 }
 
 impl TxFuture {
@@ -191,6 +199,7 @@ impl Drop for TxFuture {
     }
 }
 
+/// Asynchronous TX driver.
 pub struct TxAsync<D: DelayNs> {
     tx: Tx,
     waker_idx: usize,
@@ -233,6 +242,7 @@ impl<D: DelayNs> TxAsync<D> {
         }
     }
 
+    /// Release the underlying TX handle.
     pub fn release(self) -> Tx {
         self.tx
     }
