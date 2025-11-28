@@ -1,12 +1,17 @@
 [package]
 name = "axi-uart16550"
 version = "0.1.0"
+description = "AXI UART16550 IP core driver"
+author = ["Robin Mueller <muellerr@irs.uni-stuttgart.de>"]
+rust-version = "1.85.1"
 edition = "2024"
+homepage = "https://egit.irs.uni-stuttgart.de/rust/axi-uart16550"
+repository = "https://egit.irs.uni-stuttgart.de/rust/axi-uart16550"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 derive-mmio = "0.6"
-bitbybit = "1.3"
+bitbybit = "1.4"
 arbitrary-int = "2"
 nb = "1"
 libm = "0.2"

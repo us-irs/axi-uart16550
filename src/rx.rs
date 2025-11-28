@@ -1,10 +1,14 @@
+//! # Receiver (RX) support module
 use core::convert::Infallible;
 
 use crate::{
     DEFAULT_RX_TRIGGER_LEVEL,
-    registers::{self, Fcr, Ier, Iir, IntId2, Lsr},
+    registers::{
+        self, FifoControl, InterruptEnable, InterruptId2, InterruptIdentification, LineStatus,
+    },
 };
 
+/// RX errors structure.
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
 pub struct RxErrors {
     parity: bool,
@@ -13,6 +17,8 @@ pub struct RxErrors {
 }
 
 impl RxErrors {
+    /// Construct a new empty [RxErrors] structure.
+    #[inline]
     pub const fn new() -> Self {
         Self {
             parity: false,
@@ -21,26 +27,38 @@ impl RxErrors {
         }
     }
 
+    /// Parity error.
+    #[inline]
     pub const fn parity(&self) -> bool {
         self.parity
     }
 
+    /// Framing error.
+    #[inline]
     pub const fn frame(&self) -> bool {
         self.frame
     }
 
+    /// Overrun error.
+    #[inline]
     pub const fn overrun(&self) -> bool {
         self.overrun
     }
 
+    /// Error has occurred.
+    #[inline]
     pub const fn has_errors(&self) -> bool {
         self.parity || self.frame || self.overrun
     }
 }
 
+/// AXI UARTLITE RX driver.
+///
+/// Can be created by [super::AxiUart16550::split]ting a regular AXI UART16550 structure or
+/// by [Self::steal]ing it unsafely.
 pub struct Rx {
     /// Internal MMIO register structure.
-    pub(crate) regs: registers::MmioAxiUart16550<'static>,
+    pub(crate) regs: registers::MmioRegisters<'static>,
     pub(crate) errors: Option<RxErrors>,
 }
 
@@ -60,15 +78,19 @@ impl Rx {
     /// The same safey rules specified in [super::AxiUart16550::new] apply.
     pub const unsafe fn steal(base_addr: usize) -> Self {
         Self {
-            regs: unsafe { registers::AxiUart16550::new_mmio_at(base_addr) },
+            regs: unsafe { registers::Registers::new_mmio_at(base_addr) },
             errors: None,
         }
     }
 
-    pub(crate) fn new(regs: registers::MmioAxiUart16550<'static>) -> Self {
+    pub(crate) fn new(regs: registers::MmioRegisters<'static>) -> Self {
         Self { regs, errors: None }
     }
 
+    /// Read the RX FIFO.
+    ///
+    /// This functions offers a [nb::Result] based API and returns [nb::Error::WouldBlock] if there
+    /// is nothing to read.
     #[inline]
     pub fn read_fifo(&mut self) -> nb::Result<u8, Infallible> {
         let status_reg = self.regs.read_lsr();
@@ -76,11 +98,12 @@ impl Rx {
             return Err(nb::Error::WouldBlock);
         }
         if status_reg.error_in_rx_fifo() {
-            self.errors = Some(Self::lsr_to_errors(status_reg));
+            self.errors = Some(Self::lsr_to_errors(&status_reg));
         }
         Ok(self.read_fifo_unchecked())
     }
 
+    /// Read from the FIFO without checking the FIFO fill status.
     #[inline(always)]
     pub fn read_fifo_unchecked(&mut self) -> u8 {
         self.regs.read_fifo_or_dll() as u8
@@ -99,30 +122,33 @@ impl Rx {
         self.enable_interrupt();
     }
 
+    /// Enable RX interrupts.
     #[inline]
     pub fn enable_interrupt(&mut self) {
         self.regs.modify_ier_or_dlm(|val| {
-            let mut ier = Ier::new_with_raw_value(val);
+            let mut ier = InterruptEnable::new_with_raw_value(val);
             ier.set_rx_avl(true);
             ier.set_line_status(true);
             ier.raw_value()
         });
     }
 
+    /// Disable RX interrupts.
     #[inline]
     pub fn disable_interrupt(&mut self) {
         self.regs.modify_ier_or_dlm(|val| {
-            let mut ier = Ier::new_with_raw_value(val);
+            let mut ier = InterruptEnable::new_with_raw_value(val);
             ier.set_rx_avl(false);
             ier.set_line_status(false);
             ier.raw_value()
         });
     }
 
+    /// Reset the RX FIFO.
     #[inline]
     pub fn reset_fifo(&mut self) {
         self.regs.write_iir_or_fcr(
-            Fcr::builder()
+            FifoControl::builder()
                 .with_rx_fifo_trigger(DEFAULT_RX_TRIGGER_LEVEL)
                 .with_dma_mode_sel(false)
                 .with_reset_tx_fifo(false)
@@ -133,32 +159,38 @@ impl Rx {
         );
     }
 
+    /// Data is available.
     #[inline(always)]
-    pub fn has_data(&mut self) -> bool {
+    pub fn has_data(&self) -> bool {
         self.regs.read_lsr().data_ready()
     }
 
+    /// Read the IIR register.
     #[inline]
-    pub fn read_iir(&mut self) -> Iir {
-        Iir::new_with_raw_value(self.regs.read_iir_or_fcr())
+    pub fn read_iir(&mut self) -> InterruptIdentification {
+        InterruptIdentification::new_with_raw_value(self.regs.read_iir_or_fcr())
     }
 
+    /// Should be called when a Line Status interrupt occurs.
     #[inline]
-    pub fn on_interrupt_receiver_line_status(&mut self, _iir: Iir) -> RxErrors {
+    pub fn on_interrupt_receiver_line_status(&mut self, _iir: InterruptIdentification) -> RxErrors {
         let lsr = self.regs.read_lsr();
-        Self::lsr_to_errors(lsr)
+        Self::lsr_to_errors(&lsr)
     }
 
+    /// Should be called when a Data Available or Character Timeout interrupt occurs.
+    ///
+    /// Reads all available data into the provided buffer and returns the number of bytes read.
     #[inline]
     pub fn on_interrupt_data_available_or_char_timeout(
         &mut self,
-        int_id2: IntId2,
+        int_id2: InterruptId2,
         buf: &mut [u8; 16],
     ) -> usize {
         let mut read = 0;
         // It is guaranteed that we can read the FIFO trigger level.
-        if int_id2 == IntId2::RxDataAvailable {
-            let trigger_level = Fcr::new_with_raw_value(self.regs.read_iir_or_fcr());
+        if int_id2 == InterruptId2::RxDataAvailable {
+            let trigger_level = FifoControl::new_with_raw_value(self.regs.read_iir_or_fcr());
             (0..trigger_level.rx_fifo_trigger().as_num() as usize).for_each(|i| {
                 buf[i] = self.read_fifo_unchecked();
                 read += 1;
@@ -172,7 +204,8 @@ impl Rx {
         read
     }
 
-    pub fn lsr_to_errors(status_reg: Lsr) -> RxErrors {
+    /// Extract RX errors from the LSR register.
+    pub fn lsr_to_errors(status_reg: &LineStatus) -> RxErrors {
         let mut errors = RxErrors::new();
         if status_reg.framing_error() {
             errors.frame = true;
