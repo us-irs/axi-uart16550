@@ -20,7 +20,7 @@ use core::{cell::RefCell, convert::Infallible, sync::atomic::AtomicBool};
 use critical_section::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal_async::delay::DelayNs;
-use raw_slice::RawBufSlice;
+use raw_buffer::RawBufSlice;
 
 use crate::{
     FIFO_DEPTH, Tx,
@@ -130,23 +130,15 @@ impl TxContext {
 }
 
 /// TX future structure.
-pub struct TxFuture {
+pub struct TxFuture<'tx, 'buf> {
     waker_idx: usize,
     reg_block: registers::MmioRegisters<'static>,
+    phantom: core::marker::PhantomData<(&'tx (), &'buf ())>,
 }
 
-impl TxFuture {
+impl<'tx, 'buf> TxFuture<'tx, 'buf> {
     /// Create a new TX future which can be used for asynchronous TX operations.
-    ///
-    /// # Safety
-    ///
-    /// This function stores the raw pointer of the passed data slice. The user MUST ensure
-    /// that the slice outlives the data structure.
-    pub unsafe fn new(
-        tx: &mut Tx,
-        waker_idx: usize,
-        data: &[u8],
-    ) -> Result<Self, InvalidWakerIndex> {
+    pub fn new(tx: &mut Tx, waker_idx: usize, data: &'buf [u8]) -> Result<Self, InvalidWakerIndex> {
         TX_DONE[waker_idx].store(false, core::sync::atomic::Ordering::Relaxed);
         tx.disable_interrupt();
         tx.reset_fifo();
@@ -168,11 +160,12 @@ impl TxFuture {
         Ok(Self {
             waker_idx,
             reg_block: unsafe { tx.regs.clone() },
+            phantom: core::marker::PhantomData,
         })
     }
 }
 
-impl Future for TxFuture {
+impl Future for TxFuture<'_, '_> {
     type Output = usize;
 
     fn poll(
@@ -192,7 +185,7 @@ impl Future for TxFuture {
     }
 }
 
-impl Drop for TxFuture {
+impl Drop for TxFuture<'_, '_> {
     fn drop(&mut self) {
         let mut tx = Tx::new(unsafe { self.reg_block.clone() });
         tx.disable_interrupt();
@@ -212,7 +205,12 @@ impl<D: DelayNs> TxAsync<D> {
     /// The delay function is a [DelayNs] provider which is used to allow flushing the
     /// device properly. This is because even when a write finished, the UART might still
     /// be busy shifting the last byte out.
-    pub fn new(tx: Tx, waker_idx: usize, delay: D) -> Result<Self, InvalidWakerIndex> {
+    ///
+    /// # Safety
+    ///
+    /// The user MUST ensure that the `Drop` method of all futures generated with this driver
+    /// is called on transfer cancellation. By default, this does not require any special handling.
+    pub unsafe fn new(tx: Tx, waker_idx: usize, delay: D) -> Result<Self, InvalidWakerIndex> {
         if waker_idx >= NUM_WAKERS {
             return Err(InvalidWakerIndex(waker_idx));
         }
@@ -227,12 +225,8 @@ impl<D: DelayNs> TxAsync<D> {
     ///
     /// This implementation is not side effect free, and a started future might have already
     /// written part of the passed buffer.
-    pub async fn write(&mut self, buf: &[u8]) -> usize {
-        if buf.is_empty() {
-            return 0;
-        }
-        let fut = unsafe { TxFuture::new(&mut self.tx, self.waker_idx, buf).unwrap() };
-        fut.await
+    pub fn write<'buf>(&mut self, buf: &'buf [u8]) -> TxFuture<'_, 'buf> {
+        TxFuture::new(&mut self.tx, self.waker_idx, buf).unwrap()
     }
 
     /// Flush this output stream, ensuring that all intermediately buffered contents reach their destination.

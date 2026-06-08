@@ -13,7 +13,7 @@ check:
   cargo check
 
 embedded:
-  cargo build --target armv7a-none-eabi
+  cargo build --target armv7a-none-eabihf
 
 test:
   cargo nextest r
