@@ -61,7 +61,7 @@ pub fn calculate_error_rate_from_div(
     if baudrate == 0 || div == 0 {
         return Err(DivisorZeroError);
     }
-    let actual = (clk_in.raw() as f32) / (16.0 * div as f32);
+    let actual = (clk_in.to_raw() as f32) / (16.0 * div as f32);
     Ok(libm::fabsf(actual - baudrate as f32) / baudrate as f32)
 }
 
@@ -140,7 +140,7 @@ impl ClockConfig {
             return Err(DivisorZeroError);
         }
         // Rounding integer division, by adding half the divisor to the dividend.
-        Ok((clk_in.raw() + (8 * baudrate)) / (16 * baudrate))
+        Ok((clk_in.to_raw() + (8 * baudrate)) / (16 * baudrate))
     }
 }
 
