@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # [unreleased]
 
+# [v0.2.0] 2026-06-08
+
 - TX futures borrow buffer for their lifetime now.
 - Constructor is now `unsafe`.
 - Async TX write method now returns a future.
@@ -16,5 +18,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release.
 
-[unreleased]: https://egit.irs.uni-stuttgart.de/rust/axi-uart16550/compare/v0.1.1...HEAD
+[unreleased]: https://egit.irs.uni-stuttgart.de/rust/axi-uart16550/compare/v0.2.0...HEAD
+[v0.2.0]: https://egit.irs.uni-stuttgart.de/rust/axi-uart16550/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://egit.irs.uni-stuttgart.de/rust/axi-uart16550/tag/v0.1.0
